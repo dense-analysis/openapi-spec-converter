@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi2"
@@ -117,31 +118,27 @@ func readInputFile(arguments Arguments) []byte {
 	return inputData
 }
 
-func convertSwaggerToOpenAPI30(data []byte) ([]byte, error) {
-	var kinSwaggerDoc openapi2.T
+func make30RequiredAndReadonlyPropertiesOnlyReadonly(schema *base.Schema) {
+	if schema.Properties != nil && len(schema.Required) > 0 {
+		newRequired := []string{}
 
-	if err := json.Unmarshal(data, &kinSwaggerDoc); err != nil {
-		if err := yaml.Unmarshal(data, &kinSwaggerDoc); err != nil {
-			return nil, fmt.Errorf("Error loading Swagger data: %w", err)
+		for _, propName := range schema.Required {
+			readonly := false
+
+			if schema.Properties != nil {
+				if item, ok := schema.Properties.Get(propName); ok {
+					propSchema := item.Schema()
+
+					readonly = propSchema.ReadOnly != nil && *propSchema.ReadOnly
+				}
+			}
+
+			if !readonly {
+				newRequired = append(newRequired, propName)
+			}
 		}
-	}
 
-	if kinOpenAPIDoc, err := openapi2conv.ToV3(&kinSwaggerDoc); err == nil {
-		return kinOpenAPIDoc.MarshalJSON()
-	} else {
-		return nil, err
-	}
-}
-
-func convertOpenAPI30ToSwagger(data []byte) ([]byte, error) {
-	if kinOpenAPIDoc, err := openapi3.NewLoader().LoadFromData(data); err == nil {
-		if kinSwaggerDoc, err := openapi2conv.FromV3(kinOpenAPIDoc); err == nil {
-			return kinSwaggerDoc.MarshalJSON()
-		} else {
-			return nil, err
-		}
-	} else {
-		return nil, err
+		schema.Required = newRequired
 	}
 }
 
@@ -392,9 +389,7 @@ func clear30RequestFileContentSchemaFor31(
 			for operation := range pathItem.GetOperations().ValuesFromOldest() {
 				if operation.RequestBody != nil && operation.RequestBody.Content != nil {
 					// Clear the schema for application/octet-stream, as the type is implied.
-					content, ok := operation.RequestBody.Content.Get("application/octet-stream")
-
-					if ok {
+					if content, ok := operation.RequestBody.Content.Get("application/octet-stream"); ok {
 						content.Schema = nil
 					}
 				}
@@ -411,9 +406,7 @@ func set31RequestFileContentSchemaFor30(
 			for operation := range pathItem.GetOperations().ValuesFromOldest() {
 				if operation.RequestBody != nil && operation.RequestBody.Content != nil {
 					// Clear the schema for application/octet-stream, as the type is implied.
-					content, ok := operation.RequestBody.Content.Get("application/octet-stream")
-
-					if ok {
+					if content, ok := operation.RequestBody.Content.Get("application/octet-stream"); ok {
 						content.Schema = base.CreateSchemaProxy(&base.Schema{
 							Type:   []string{"string"},
 							Format: "binary",
@@ -423,6 +416,94 @@ func set31RequestFileContentSchemaFor30(
 			}
 		}
 	}
+}
+
+func fixSwaggerOperationUploadFormat(operation *openapi2.Operation) {
+	if operation != nil && slices.Contains(operation.Consumes, "application/octet-stream") {
+		for _, param := range operation.Parameters {
+			if param.In == "body" && param.Schema == nil {
+				param.Schema = &openapi2.SchemaRef{
+					Value: &openapi2.Schema{
+						Type:   &openapi3.Types{"string"},
+						Format: "binary",
+					},
+				}
+			}
+		}
+	}
+}
+
+func fixSwaggerDocUploadFormats(kinSwaggerDoc *openapi2.T) {
+	for _, path := range kinSwaggerDoc.Paths {
+		// HEAD, GET, DELETE we don't check here.
+		// All other operations we try to fix.
+		fixSwaggerOperationUploadFormat(path.Post)
+		fixSwaggerOperationUploadFormat(path.Options)
+		fixSwaggerOperationUploadFormat(path.Patch)
+		fixSwaggerOperationUploadFormat(path.Put)
+	}
+}
+
+func convertSwaggerToOpenAPI30(data []byte) ([]byte, error) {
+	var kinSwaggerDoc openapi2.T
+
+	if err := json.Unmarshal(data, &kinSwaggerDoc); err != nil {
+		if err := yaml.Unmarshal(data, &kinSwaggerDoc); err != nil {
+			return nil, fmt.Errorf("Error loading Swagger data: %w", err)
+		}
+	}
+
+	if kinOpenAPIDoc, err := openapi2conv.ToV3(&kinSwaggerDoc); err == nil {
+		return kinOpenAPIDoc.MarshalJSON()
+	} else {
+		return nil, fmt.Errorf("Error converting Swagger to 3.0 %w", err)
+	}
+}
+
+func convertOpenAPI30ToSwagger(data []byte) ([]byte, error) {
+	doc, err := libopenapi.NewDocument(data)
+
+	if err != nil {
+		return nil, fmt.Errorf("Error loading document: %w", err)
+	}
+
+	// Build the document in libopenapi so we can modify the document
+	// to correct issues not handled by kin-openapi.
+	model, errs := doc.BuildV3Model()
+
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("Errors loading document: %w", errors.Join(errs...))
+	}
+
+	updateAllSchema(model, func(schema *base.Schema) {
+		// We must make every property that is both required and also readonly
+		// only be readonly, or they will break Swagger validation.
+		make30RequiredAndReadonlyPropertiesOnlyReadonly(schema)
+	})
+
+	data, doc, model, errs = doc.RenderAndReload()
+
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+
+	var kinSwaggerDoc *openapi2.T
+
+	if kinOpenAPIDoc, err := openapi3.NewLoader().LoadFromData(data); err == nil {
+		kinSwaggerDoc, err = openapi2conv.FromV3(kinOpenAPIDoc)
+
+		if err != nil {
+			return nil, fmt.Errorf("Error converting 3.0 to Swagger %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("Error Load 3.0 for converting to Swagger %w", err)
+	}
+
+	// The kin-openapi Swagger converter doesn't add {schema: {type: "string", format: "binary"}}
+	// when creating upload specs for binary content. We need to add it back in again.
+	fixSwaggerDocUploadFormats(kinSwaggerDoc)
+
+	return kinSwaggerDoc.MarshalJSON()
 }
 
 func convertOpenAPI30To31(data []byte) ([]byte, error) {
