@@ -1,0 +1,6 @@
+extends:
+  - minimal
+
+rules:
+  operation-summary: off
+  operation-operationId: off

@@ -1,0 +1,7 @@
+*.json
+*.md
+.git
+.github
+node_modules
+output
+specs

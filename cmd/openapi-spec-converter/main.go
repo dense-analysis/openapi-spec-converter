@@ -1,16 +1,16 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
+	openapispecconverter "github.com/dense-analysis/openapi-spec-converter"
 	"github.com/getkin/kin-openapi/openapi2"
 	"github.com/getkin/kin-openapi/openapi2conv"
 	"github.com/getkin/kin-openapi/openapi3"
@@ -20,6 +20,7 @@ import (
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
 	"github.com/pb33f/libopenapi/datamodel/low"
 	"github.com/pb33f/libopenapi/utils"
+	"github.com/pborman/getopt/v2"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,52 +42,69 @@ const (
 type Arguments struct {
 	inputFilename  string
 	outputFilename string
-	outputVersion  SpecVersion
+	outputTarget   SpecVersion
 	outputFormat   Format
 }
 
-func parseArgs() (Arguments, error) {
+func parseArgs() Arguments {
 	var arguments Arguments
 
-	outputFilename := flag.String("output", "", "Output file (default stdout)")
-	outputVersion := flag.String("version", "3.1", "Target version: swagger, 3.0, or 3.1")
-	outputFormat := flag.String("format", "json", "Output format: yaml or json")
+	getopt.SetProgram(filepath.Base(os.Args[0]))
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] <input>\n", os.Args[0])
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nPositional arguments:\n  input   Path to the input file (default stdin)\n")
+	showHelp := getopt.BoolLong("help", 'h', "Print this help message")
+	outputFilename := getopt.StringLong("output", 'o', "", "Output file (default stdout)")
+	outputVersion := getopt.StringLong("target", 't', "3.1", "Target version: swagger, 3.0, or 3.1")
+	outputFormat := getopt.StringLong("format", 'f', "json", "Output format: yaml or json")
+	getopt.SetParameters("<input>")
+
+	getopt.Parse()
+
+	if showHelp != nil && *showHelp {
+		getopt.PrintUsage(os.Stdout)
+		os.Exit(0)
 	}
 
-	flag.Parse()
+	args := getopt.Args()
 
-	args := flag.Args()
+	if len(args) > 2 {
+		fmt.Fprintln(os.Stderr, "Invalid number of arguments")
+		getopt.PrintUsage(os.Stderr)
+		os.Exit(1)
+	}
 
-	if len(args) == 1 {
-		arguments.inputFilename = args[0]
-	} else {
+	if len(args) == 0 {
+		// If no arguments are supplied and there's no data being piped in,
+		// then complain and print usage.
+		if stat, err := os.Stdin.Stat(); err != nil || (stat.Mode()&os.ModeCharDevice) != 0 {
+			fmt.Fprintln(os.Stderr, "No input filename or open stdin pipe")
+			getopt.PrintUsage(os.Stderr)
+			os.Exit(1)
+		}
+
 		arguments.inputFilename = "-"
+	} else {
+		arguments.inputFilename = args[0]
+	}
+
+	if len(arguments.inputFilename) == 0 {
+		fmt.Fprintln(os.Stderr, "Empty input filename")
+		getopt.PrintUsage(os.Stderr)
+		os.Exit(1)
 	}
 
 	arguments.outputFilename = *outputFilename
 
-	if len(args) > 2 {
-		return arguments, fmt.Errorf("Invalid number of arguments")
-	}
-
-	if len(arguments.inputFilename) == 0 {
-		return arguments, fmt.Errorf("Invalid input filename")
-	}
-
 	switch strings.ToLower(*outputVersion) {
 	case "swagger":
-		arguments.outputVersion = Swagger
+		arguments.outputTarget = Swagger
 	case "3.0":
-		arguments.outputVersion = OpenAPI30
+		arguments.outputTarget = OpenAPI30
 	case "3.1":
-		arguments.outputVersion = OpenAPI31
+		arguments.outputTarget = OpenAPI31
 	default:
-		return arguments, fmt.Errorf("Invalid version: %s", *outputVersion)
+		fmt.Fprintf(os.Stderr, "Invalid target version %s\n", *outputVersion)
+		getopt.PrintUsage(os.Stderr)
+		os.Exit(1)
 	}
 
 	switch strings.ToLower(*outputFormat) {
@@ -95,27 +113,22 @@ func parseArgs() (Arguments, error) {
 	case "yaml":
 		arguments.outputFormat = YAML
 	default:
-		return arguments, fmt.Errorf("Invalid format: %s", *outputFormat)
+		fmt.Fprintf(os.Stderr, "Invalid format: %s\n", *outputFormat)
+		getopt.PrintUsage(os.Stderr)
+		os.Exit(1)
 	}
 
-	return arguments, nil
+	return arguments
 }
 
-func readInputFile(arguments Arguments) []byte {
-	var inputData []byte
-	var err error
-
+func readInputFile(arguments Arguments) (inputData []byte, err error) {
 	if arguments.inputFilename == "-" {
 		inputData, err = io.ReadAll(os.Stdin)
 	} else {
 		inputData, err = os.ReadFile(arguments.inputFilename)
 	}
 
-	if err != nil {
-		log.Fatalf("Error reading input file %v\n", err)
-	}
-
-	return inputData
+	return
 }
 
 func make30RequiredAndReadonlyPropertiesOnlyReadonly(schema *base.Schema) {
@@ -447,10 +460,20 @@ func fixSwaggerDocUploadFormats(kinSwaggerDoc *openapi2.T) {
 func convertSwaggerToOpenAPI30(data []byte) ([]byte, error) {
 	var kinSwaggerDoc openapi2.T
 
-	if err := json.Unmarshal(data, &kinSwaggerDoc); err != nil {
-		if err := yaml.Unmarshal(data, &kinSwaggerDoc); err != nil {
-			return nil, fmt.Errorf("Error loading Swagger data: %w", err)
+	dataFormat := checkDataFormat(data)
+
+	// kin-openapi cannot unmarshal YAML correctly, so we have to first convert input to JSON.
+	if dataFormat != JSON {
+		var err error
+		data, err = ghodssYaml.YAMLToJSON(data)
+
+		if err != nil {
+			return nil, fmt.Errorf("Error converting Swagger YAML to JSON: %w", err)
 		}
+	}
+
+	if err := openapispecconverter.UnmarshalSwagger(data, &kinSwaggerDoc); err != nil {
+		return nil, fmt.Errorf("Error loading Swagger data: %w", err)
 	}
 
 	if kinOpenAPIDoc, err := openapi2conv.ToV3(&kinSwaggerDoc); err == nil {
@@ -612,10 +635,8 @@ func convertDocument(data []byte, outputVersion SpecVersion) ([]byte, error) {
 	}
 	var basicDoc BasicDoc
 
-	if err := json.Unmarshal(data, &basicDoc); err != nil {
-		if err := yaml.Unmarshal(data, &basicDoc); err != nil {
-			return nil, fmt.Errorf("Cannot parse Swagger or OpenAPI document")
-		}
+	if err := yaml.Unmarshal(data, &basicDoc); err != nil {
+		return nil, fmt.Errorf("Cannot parse Swagger or OpenAPI document")
 	}
 
 	// Get the version string from the Swagger doc if empty.
@@ -682,17 +703,18 @@ func checkDataFormat(data []byte) Format {
 }
 
 func main() {
-	arguments, err := parseArgs()
+	arguments := parseArgs()
+
+	data, err := readInputFile(arguments)
 
 	if err != nil {
-		log.Fatalf("%v\n", err)
+		log.Fatalf("Error reading input file %v\n", err)
 	}
 
-	data := readInputFile(arguments)
-	data, err = convertDocument(data, arguments.outputVersion)
+	data, err = convertDocument(data, arguments.outputTarget)
 
 	if err != nil {
-		log.Fatalf("Error converting document: %v\n", err)
+		log.Fatalf("Error converting document: %+v\n", err)
 	}
 
 	dataFormat := checkDataFormat(data)

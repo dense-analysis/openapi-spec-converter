@@ -1,0 +1,360 @@
+---
+openapi: "3.1.0"  # Migrated from a 3.0.x version
+info:
+  title: "Comprehensive API"
+  summary: "A test API containing many possible examples for OpenAPI 3.1"
+  description: |-
+    This is a comprehensive OpenAPI 3.1 specification meant for testing
+    migration from OpenAPI 3.0. It includes every attribute from the spec
+    (including vendor extensions) and multiple JSON Schema constructs that
+    illustrate the migration examples described in the OpenAPI Initiative’s
+    blog post.
+  termsOfService: "https://example.com/terms"
+  contact:
+    name: "API Support"
+    url: "https://example.com/support"
+    email: "support@example.com"
+  license:
+    name: "Apache 2.0"
+    url: "https://www.apache.org/licenses/LICENSE-2.0.html"
+  version: "1.0.0"
+jsonSchemaDialect: "https://spec.openapis.org/oas/3.1/dialect/base"
+servers:
+  - url: "https://api.example.com/v1"
+    description: "Primary production server"
+    variables:
+      port:
+        default: "443"
+        enum: ["80", "443"]
+        description: "Server port"
+paths:
+  /items:
+    summary: "Operations on items"
+    description: "Retrieve, create, update, or delete items."
+    parameters:
+      - name: "globalParam"
+        in: "query"
+        description: "A global query parameter"
+        required: false
+        schema:
+          type: "string"
+    get:
+      summary: "List items"
+      operationId: "listItems"
+      tags:
+        - "Items"
+      parameters:
+        - name: "limit"
+          in: "query"
+          description: "Maximum number of items"
+          required: false
+          schema:
+            type: "integer"
+            format: "int32"
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: "A list of items"
+          headers:
+            X-Rate-Limit:
+              description: "Rate limit for this operation"
+              schema:
+                type: "integer"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItemList"
+        default:
+          description: "Unexpected error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security:
+        - api_key: []
+    post:
+      summary: "Create an item"
+      operationId: "createItem"
+      requestBody:
+        description: "Item to add"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Item"
+            examples:
+              example1:
+                summary: "An example item"
+                value:
+                  id: 1
+                  name: "Sample Item"
+      responses:
+        "201":
+          description: "Item created"
+      security:
+        - bearerAuth: []
+  /items/{itemId}:
+    parameters:
+      - name: "itemId"
+        in: "path"
+        description: "ID of the item"
+        required: true
+        schema:
+          type: "integer"
+          format: "int64"
+    get:
+      summary: "Get an item"
+      operationId: "getItem"
+      responses:
+        "200":
+          description: "Successful operation"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "404":
+          description: "Item not found"
+    put:
+      summary: "Update an item"
+      operationId: "updateItem"
+      requestBody:
+        description: "Item data to update"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemUpdate"
+      responses:
+        "200":
+          description: "Item updated"
+    delete:
+      summary: "Delete an item"
+      operationId: "deleteItem"
+      responses:
+        "204":
+          description: "Item deleted"
+  /upload:  # New path for file upload migration example
+    post:
+      summary: "Upload a file (binary)"
+      operationId: "uploadFileBinary"
+      requestBody:
+        description: "Binary file upload using application/octet-stream"
+        required: true
+        content:
+          application/octet-stream:
+            # Migrated from type: string, format: binary in OpenAPI 3.0
+            schema: {}
+      responses:
+        "200":
+          description: "File uploaded successfully"
+  /uploadFile:
+    post:
+      summary: "Upload a file (base64 encoded)"
+      operationId: "uploadFileBase64"
+      requestBody:
+        description: "Image file upload with base64 encoding"
+        required: true
+        content:
+          image/png:
+            schema:
+              type: "string"
+              # Migrated: instead of format: base64, now use contentEncoding
+              contentEncoding: "base64"
+      responses:
+        "200":
+          description: "File uploaded successfully"
+webhooks:
+  newItemWebhook:
+    post:
+      summary: "Webhook for new items"
+      operationId: "newItemWebhook"
+      requestBody:
+        description: "Webhook payload"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Item"
+      responses:
+        "200":
+          description: "Webhook received"
+components:
+  schemas:
+    Item:
+      type: "object"
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: "integer"
+          format: "int64"
+          readOnly: true
+        # Migration: replace nullable: true with type array including "null"
+        name:
+          type: ["string", "null"]
+          examples:
+            - "Sample Item"
+        # Changed from:
+        # description:
+        #   type: "string"
+        #   nullable: true
+        # To:
+        description:
+          type: ["string", "null"]
+          examples:
+            - "A detailed description of the item."
+        tags:
+          type: "array"
+          items:
+            type: "string"
+          uniqueItems: true
+        metadata:
+          type: "object"
+          additionalProperties:
+            type: "string"
+        price:
+          type: "number"
+          format: "double"
+          minimum: 0
+        # New property to illustrate exclusiveMinimum/exclusiveMaximum:
+        discount:
+          type: "number"
+          format: "double"
+          # In OpenAPI 3.0 you might have written:
+          #   minimum: 0
+          #   exclusiveMinimum: true
+          # In 3.1, we remove the boolean and set the exclusive bound directly:
+          exclusiveMinimum: 0
+          exclusiveMaximum: 1
+        status:
+          type: "string"
+          enum: ["active", "inactive", "pending"]
+          default: "active"
+        rating:
+          type: ["number", "null"]
+        complex:
+          $ref: "#/components/schemas/ComplexType"
+      discriminator:
+        propertyName: "status"
+      xml:
+        name: "Item"
+      externalDocs:
+        description: "Find more info about Item"
+        url: "https://example.com/item-info"
+      deprecated: false
+      x-extra-info: "This is a vendor extension"
+    ItemList:
+      type: "array"
+      items:
+        $ref: "#/components/schemas/Item"
+    ItemUpdate:
+      type: "object"
+      properties:
+        name:
+          type: ["string", "null"]
+          examples:
+            - "Updated Item Name"
+        description:
+          type: ["string", "null"]
+          examples:
+            - "Updated description"
+        tags:
+          type: "array"
+          items:
+            type: "string"
+      additionalProperties: false
+    Error:
+      type: "object"
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: "integer"
+          format: "int32"
+        message:
+          type: "string"
+    ComplexType:
+      type: "object"
+      properties:
+        simpleProp:
+          type: "string"
+        arrayProp:
+          type: "array"
+          items:
+            type: "integer"
+        objectProp:
+          type: "object"
+          properties:
+            nestedProp:
+              type: "boolean"
+      additionalProperties: true
+  parameters:
+    commonQueryParam:
+      name: "common"
+      in: "query"
+      description: "A common parameter defined in components"
+      required: false
+      schema:
+        type: "string"
+  examples:
+    ErrorExample:
+      value:
+        code: 400
+        message: "Bad Request"
+  requestBodies:
+    CommonRequestBody:
+      description: "A common request body defined in components"
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Item"
+  headers:
+    RateLimit:
+      description: "Rate limit header"
+      schema:
+        type: "integer"
+        format: "int32"
+  securitySchemes:
+    api_key:
+      type: "apiKey"
+      name: "api_key"
+      in: "header"
+    bearerAuth:
+      type: "http"
+      scheme: "bearer"
+      bearerFormat: "JWT"
+  links:
+    ItemLink:
+      operationId: "getItem"
+      parameters:
+        itemId: "$response.body#/id"
+      description: "Link to get an item by ID"
+  callbacks:
+    ItemCallback:
+      "{$request.body#/callbackUrl}":
+        post:
+          requestBody:
+            description: "Callback payload"
+            required: true
+            content:
+              application/json:
+                schema:
+                  $ref: "#/components/schemas/Item"
+          responses:
+            "200":
+              description: "Callback processed"
+security:
+  - api_key: []
+tags:
+  - name: "Items"
+    description: "Operations related to items"
+  - name: "Webhook"
+    description: "Webhook related operations"
+externalDocs:
+  description: "Additional documentation"
+  url: "https://example.com/docs"
+x-internal-id: "comprehensive-api-123"

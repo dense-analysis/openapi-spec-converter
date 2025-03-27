@@ -6,6 +6,7 @@ require (
 	github.com/getkin/kin-openapi v0.131.0
 	github.com/ghodss/yaml v1.0.0
 	github.com/pb33f/libopenapi v0.21.8
+	github.com/pborman/getopt/v2 v2.1.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
