@@ -513,7 +513,7 @@ func convertOpenAPI30ToSwagger(data []byte) ([]byte, error) {
 	var kinSwaggerDoc *openapi2.T
 
 	if kinOpenAPIDoc, err := openapi3.NewLoader().LoadFromData(data); err == nil {
-		kinSwaggerDoc, err = openapi2conv.FromV3(kinOpenAPIDoc)
+		kinSwaggerDoc, err = openapispecconverter.OpenAPI30ToSwagger(kinOpenAPIDoc)
 
 		if err != nil {
 			return nil, fmt.Errorf("Error converting 3.0 to Swagger %w", err)

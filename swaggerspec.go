@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi2"
+	"github.com/getkin/kin-openapi/openapi2conv"
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
@@ -367,4 +368,21 @@ func UnmarshalSwagger(data []byte, kinDoc *openapi2.T) error {
 	}
 
 	return nil
+}
+
+// OpenAPI30ToSwagger converts OpenAPI 3.0 documents from kin-openapi with additional fixes applied.
+func OpenAPI30ToSwagger(kinOpenAPIDoc *openapi3.T) (*openapi2.T, error) {
+	// kin-openapi errors on request body content, so rip it all out.
+	contentLocations := extractSwaggerRequestBodyContent(kinOpenAPIDoc)
+
+	kinSwaggerDoc, err := openapi2conv.FromV3(kinOpenAPIDoc)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Put the request body content we ripped out back in again.
+	insertOpenAPI30RequestBodyContent(kinSwaggerDoc, contentLocations)
+
+	return kinSwaggerDoc, nil
 }
