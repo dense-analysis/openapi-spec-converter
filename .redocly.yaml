@@ -4,3 +4,5 @@ extends:
 rules:
   operation-summary: off
   operation-operationId: off
+  no-unused-components: off
+  no-server-example.com: off

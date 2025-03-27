@@ -31,11 +31,11 @@ fi
 # Up convert Swagger file back to OpenAPI 3.1 again, and output as JSON
 echo 'Converting 3.1 to Swagger spec back to 3.1 again'
 docker run --rm -i openapi-spec-converter:latest -t 3.1 -f json \
-    < output/31-spec-with-differences-from-30.back-to-31.yaml \
-    > output/31-spec-with-differences-from-30.converted-swagger.yaml
+    < output/31-spec-with-differences-from-30.converted-swagger.yaml \
+    > output/31-spec-with-differences-from-30.back-to-31.json
 
 echo 'Validating 3.1 spec converted back from Swagger'
-if ! node_modules/.bin/redocly lint output/31-spec-with-differences-from-30.converted-swagger.yaml 2>&1; then
+if ! node_modules/.bin/redocly lint output/31-spec-with-differences-from-30.back-to-31.json 2>&1; then
     exit_code=1
 fi
 
